@@ -1,4 +1,3 @@
-# llg-video-analyzer
 # L & L Law Group — Case Video Analyzer
 
 AI-powered analysis of body cam and in-car (dashcam) video evidence.
