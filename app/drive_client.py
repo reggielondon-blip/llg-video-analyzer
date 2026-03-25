@@ -1,32 +1,38 @@
 """
 DriveClient — Google Drive API v3 Integration
-Uses user OAuth2 credentials (refresh token) so the service can access
-ANY file in the firm's Google Drive — no folder sharing required.
+Uses Service Account credentials — never expires, no token refresh needed.
 
-Auth env vars required:
-    GOOGLE_CLIENT_ID       — OAuth2 client ID from Google Cloud Console
-    GOOGLE_CLIENT_SECRET   — OAuth2 client secret
-    GOOGLE_REFRESH_TOKEN   — Long-lived refresh token (from scripts/get_token.py)
+To grant access to all of Drive:
+  1. Copy the client_email from your service account JSON
+  2. Go to drive.google.com
+  3. Right-click "My Drive" (the root) → Share
+  4. Paste the service account email → Editor → Share
+  This gives the service account access to every file in your Drive.
+
+Required env var:
+    GOOGLE_SERVICE_ACCOUNT_JSON  — full contents of the downloaded JSON key file
 """
 
 import os
 import io
 import json
 import logging
-from pathlib import Path
-from typing import List, Optional, Dict
-from google.oauth2.credentials import Credentials
-from google.auth.transport.requests import Request
+from typing import List, Dict, Optional
+from google.oauth2 import service_account
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaIoBaseDownload, MediaFileUpload
 
 log = logging.getLogger("drive-client")
 
 SCOPES = ["https://www.googleapis.com/auth/drive"]
-
-# Tag added to processed video files so we don't re-analyze them
-PROCESSED_PROPERTY_KEY = "llg_analyzed"
+PROCESSED_PROPERTY_KEY   = "llg_analyzed"
 PROCESSED_PROPERTY_VALUE = "true"
+
+SUPPORTED_MIME_TYPES = [
+    "video/mp4", "video/quicktime", "video/x-msvideo",
+    "video/x-matroska", "video/webm", "video/mpeg",
+    "video/x-ms-wmv", "video/3gpp", "video/m4v",
+]
 
 
 class DriveClient:
@@ -35,194 +41,110 @@ class DriveClient:
         self.service = self._build_service()
 
     def _build_service(self):
-        """
-        Build Drive service using user OAuth2 credentials.
-        Automatically refreshes the access token using the stored refresh token.
-        """
-        client_id     = os.getenv("GOOGLE_CLIENT_ID")
-        client_secret = os.getenv("GOOGLE_CLIENT_SECRET")
-        refresh_token = os.getenv("GOOGLE_REFRESH_TOKEN")
-
-        if not all([client_id, client_secret, refresh_token]):
+        creds_json = os.getenv("GOOGLE_SERVICE_ACCOUNT_JSON")
+        if not creds_json:
             raise EnvironmentError(
-                "Missing Google OAuth credentials. Set GOOGLE_CLIENT_ID, "
-                "GOOGLE_CLIENT_SECRET, and GOOGLE_REFRESH_TOKEN in Railway variables. "
-                "Run scripts/get_token.py to generate the refresh token."
+                "GOOGLE_SERVICE_ACCOUNT_JSON is not set. "
+                "Paste the full contents of your service account JSON key into Railway Variables."
             )
-
-        creds = Credentials(
-            token=None,                          # will be fetched automatically
-            refresh_token=refresh_token,
-            token_uri="https://oauth2.googleapis.com/token",
-            client_id=client_id,
-            client_secret=client_secret,
-            scopes=SCOPES,
+        creds_dict = json.loads(creds_json)
+        creds = service_account.Credentials.from_service_account_info(
+            creds_dict, scopes=SCOPES
         )
-
-        # Force an immediate refresh so we catch credential errors at startup
-        creds.refresh(Request())
-        log.info("Google Drive authenticated via user OAuth2")
+        log.info(f"Google Drive authenticated via service account: {creds_dict.get('client_email')}")
         return build("drive", "v3", credentials=creds, cache_discovery=False)
 
-    # ── File Listing ──────────────────────────────────────────────────────────
-    def list_unprocessed_videos(
-        self, supported_extensions: set = None, max_results: int = 50
-    ) -> List[Dict]:
+    # ── List all unprocessed videos across entire Drive ───────────────────────
+    def list_unprocessed_videos(self) -> List[Dict]:
         """
-        List ALL video files across the entire Drive that have not been analyzed.
-        Searches by MIME type (catches all video subtypes) and excludes files
-        already tagged with PROCESSED_PROPERTY_KEY.
+        Search ALL of Drive for video files that haven't been analyzed yet.
+        Excludes files already tagged with llg_analyzed=true.
         """
+        mime_filter = " or ".join(
+            [f"mimeType='{m}'" for m in SUPPORTED_MIME_TYPES]
+        )
         query = (
-            "mimeType contains 'video/' "
-            "and trashed = false "
-            f"and not properties has {{ key='{PROCESSED_PROPERTY_KEY}' "
-            f"and value='{PROCESSED_PROPERTY_VALUE}' }}"
+            f"({mime_filter})"
+            f" and not appProperties has {{ key='{PROCESSED_PROPERTY_KEY}'"
+            f" and value='{PROCESSED_PROPERTY_VALUE}' }}"
+            f" and trashed=false"
         )
 
-        try:
-            results = self.service.files().list(
+        videos = []
+        page_token = None
+
+        while True:
+            resp = self.service.files().list(
                 q=query,
-                fields="files(id, name, mimeType, parents, size, createdTime)",
-                pageSize=max_results,
-                orderBy="createdTime desc",
-                includeItemsFromAllDrives=True,
-                supportsAllDrives=True,
-                corpora="allDrives"
+                fields="nextPageToken, files(id, name, mimeType, size, createdTime, parents)",
+                pageSize=50,
+                pageToken=page_token,
             ).execute()
-            files = results.get("files", [])
-            log.info(f"Found {len(files)} unprocessed video(s) across all Drive locations")
-            return files
-        except Exception as e:
-            log.error(f"Failed to list files: {e}", exc_info=True)
-            return []
 
-    # ── File Metadata ─────────────────────────────────────────────────────────
-    def get_file_metadata(self, file_id: str) -> Dict:
-        """Fetch metadata for a single file."""
-        try:
-            return self.service.files().get(
-                fileId=file_id,
-                fields="id, name, mimeType, parents, size, createdTime"
-            ).execute()
-        except Exception as e:
-            log.error(f"Failed to get metadata for {file_id}: {e}")
-            return {}
+            videos.extend(resp.get("files", []))
+            page_token = resp.get("nextPageToken")
+            if not page_token:
+                break
 
-    # ── Download ──────────────────────────────────────────────────────────────
-    def download_file(self, file_id: str, destination_path: str) -> str:
-        """
-        Download a Drive file to a local path.
-        Handles large files with chunked streaming.
-        """
-        try:
-            request = self.service.files().get_media(fileId=file_id)
-            with open(destination_path, "wb") as f:
-                downloader = MediaIoBaseDownload(f, request, chunksize=8 * 1024 * 1024)
-                done = False
-                while not done:
-                    status, done = downloader.next_chunk()
-                    if status:
-                        log.debug(f"Download progress: {status.progress() * 100:.1f}%")
-            size_mb = os.path.getsize(destination_path) / (1024 * 1024)
-            log.info(f"Downloaded {size_mb:.1f}MB to {destination_path}")
-            return destination_path
-        except Exception as e:
-            log.error(f"Download failed for {file_id}: {e}", exc_info=True)
-            raise
+        log.info(f"Found {len(videos)} unprocessed video(s) across all of Drive")
+        return videos
 
-    # ── Upload Summary ────────────────────────────────────────────────────────
-    def upload_summary(
-        self,
-        file_path: str,
-        file_name: str,
-        parent_folder_id: Optional[str]
-    ) -> str:
-        """
-        Upload the analysis summary .txt file back to the same Drive folder.
-        Returns the new file's Drive ID.
-        """
-        metadata = {
-            "name": file_name,
-            "mimeType": "text/plain",
-            "properties": {"llg_summary": "true"}
-        }
-        if parent_folder_id:
-            metadata["parents"] = [parent_folder_id]
+    # ── Download a file ───────────────────────────────────────────────────────
+    def download_file(self, file_id: str, dest_path: str) -> str:
+        request = self.service.files().get_media(fileId=file_id)
+        with open(dest_path, "wb") as f:
+            downloader = MediaIoBaseDownload(f, request, chunksize=10 * 1024 * 1024)
+            done = False
+            while not done:
+                _, done = downloader.next_chunk()
+        log.info(f"Downloaded file {file_id} → {dest_path}")
+        return dest_path
+
+    # ── Upload analysis result back to Drive ─────────────────────────────────
+    def upload_analysis(self, content: str, original_file_id: str, original_name: str) -> str:
+        """Upload the analysis .txt file to the same folder as the original video."""
+        # Get the parent folder of the original video
+        file_meta = self.service.files().get(
+            fileId=original_file_id, fields="parents"
+        ).execute()
+        parents = file_meta.get("parents", [])
+
+        analysis_name = original_name.rsplit(".", 1)[0] + "_ANALYSIS.txt"
+        media = MediaFileUpload(
+            io.BytesIO(content.encode("utf-8")),
+            mimetype="text/plain",
+            resumable=False,
+        )
+
+        # MediaFileUpload doesn't accept BytesIO directly — write to temp file
+        import tempfile, os
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".txt", delete=False) as tmp:
+            tmp.write(content)
+            tmp_path = tmp.name
 
         try:
-            media = MediaFileUpload(
-                file_path, mimetype="text/plain", resumable=False
-            )
-            file = self.service.files().create(
-                body=metadata, media_body=media, fields="id"
+            file_metadata = {"name": analysis_name, "parents": parents}
+            uploaded = self.service.files().create(
+                body=file_metadata,
+                media_body=MediaFileUpload(tmp_path, mimetype="text/plain"),
+                fields="id, webViewLink",
             ).execute()
-            file_id = file.get("id")
-            log.info(f"Summary uploaded: {file_id}")
-            return file_id
-        except Exception as e:
-            log.error(f"Upload failed: {e}", exc_info=True)
-            raise
+            log.info(f"Uploaded analysis: {analysis_name} → {uploaded.get('webViewLink')}")
+            return uploaded.get("webViewLink", "")
+        finally:
+            os.unlink(tmp_path)
 
-    # ── Mark as Processed ─────────────────────────────────────────────────────
+    # ── Mark a video as processed ─────────────────────────────────────────────
     def mark_as_processed(self, file_id: str):
-        """
-        Tag the original video file so it won't be re-analyzed.
-        Uses Drive file custom properties.
-        """
-        try:
-            self.service.files().update(
-                fileId=file_id,
-                body={
-                    "properties": {
-                        PROCESSED_PROPERTY_KEY: PROCESSED_PROPERTY_VALUE
-                    }
-                }
-            ).execute()
-            log.info(f"Marked {file_id} as processed")
-        except Exception as e:
-            log.warning(f"Could not mark file as processed: {e}")
+        self.service.files().update(
+            fileId=file_id,
+            body={"appProperties": {PROCESSED_PROPERTY_KEY: PROCESSED_PROPERTY_VALUE}},
+        ).execute()
+        log.info(f"Marked {file_id} as processed")
 
-    # ── Watch Folder ──────────────────────────────────────────────────────────
-    def setup_folder_watch(
-        self,
-        folder_id: str,
-        webhook_url: str,
-        channel_id: str,
-        expiration_hours: int = 168  # 7 days max per Drive API
-    ) -> Dict:
-        """
-        Register a Drive push notification channel on a folder.
-        Call this from setup_watch.py to configure webhooks.
-        Returns the channel details (save these for renewal).
-        """
-        import uuid
-        import time
-        expiration_ms = int((time.time() + expiration_hours * 3600) * 1000)
-
-        body = {
-            "id": channel_id or str(uuid.uuid4()),
-            "type": "web_hook",
-            "address": webhook_url,
-            "expiration": expiration_ms,
-            "payload": True
-        }
-        try:
-            response = self.service.files().watch(
-                fileId=folder_id, body=body
-            ).execute()
-            log.info(f"Watch channel created: {response}")
-            return response
-        except Exception as e:
-            log.error(f"Failed to set up folder watch: {e}", exc_info=True)
-            raise
-
-    def stop_folder_watch(self, channel_id: str, resource_id: str):
-        """Stop a Drive watch channel."""
-        try:
-            self.service.channels().stop(
-                body={"id": channel_id, "resourceId": resource_id}
-            ).execute()
-            log.info(f"Watch channel {channel_id} stopped")
-        except Exception as e:
-            log.warning(f"Could not stop watch channel: {e}")
+    # ── Get file metadata ─────────────────────────────────────────────────────
+    def get_file_info(self, file_id: str) -> Dict:
+        return self.service.files().get(
+            fileId=file_id,
+            fields="id, name, mimeType, size, createdTime, webViewLink"
+        ).execute()
