@@ -148,3 +148,5 @@ class DriveClient:
             fileId=file_id,
             fields="id, name, mimeType, size, createdTime, webViewLink"
         ).execute()
+def get_file_metadata(self, file_id: str) -> dict:
+        return self.get_file_info(file_id)
