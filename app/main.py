@@ -141,10 +141,10 @@ async def process_video_file(file_id: str):
     6. Email summary
     """
     tmp_dir = None
-    try:
-        # ── 1. Get file metadata ────────────────────────────────────────
-meta = drive_client.get_file_info(file_id)   
-file_name = meta.get("name", file_id)
+        try:
+            # — 1. Get file metadata ————————————————
+            meta = drive_client.get_file_info(file_id)
+            file_name = meta.get("name", file_id)
         mime_type = meta.get("mimeType", "")
         parents = meta.get("parents", [])
         folder_id = parents[0] if parents else None
