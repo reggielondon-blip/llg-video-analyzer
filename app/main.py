@@ -143,12 +143,22 @@ async def process_video_file(file_id: str):
         view_link = drive_client.upload_analysis(analysis, file_id, file_name)
         log.info(f"Analysis saved: {view_link}")
 
+        # — 6b. Notify via email —
+        await notifier.post_analysis_complete(
+            file_name=file_name,
+            summary=analysis,
+            drive_link=view_link,
+            duration_seconds=duration_seconds,
+            transcript_chars=len(transcript),
+        )
+
         # ── 7. Mark as processed ──────────────────────────────────────────
         drive_client.mark_as_processed(file_id)
         log.info(f"Pipeline complete for: {file_name}")
 
     except Exception as e:
         log.error(f"Pipeline error for file {file_id}: {e}", exc_info=True)
+        await notifier.post_error(file_id, str(e))
     finally:
         if tmp_dir and os.path.exists(tmp_dir):
             import shutil
