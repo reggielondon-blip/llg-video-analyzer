@@ -29,8 +29,10 @@ wiring in — exactly what to request to get access.
 |---|---|---|---|
 | **Google Ads** | Per-campaign performance reporting (`/ads/report`) | OAuth2 refresh token | 🔨 needs dev token + tokens |
 | **RingCentral** | Call log + SMS (`/calls/log`) | JWT | 🔨 needs app + JWT credential |
+| **Calendly** | Upcoming consultations (`/calendly/events`) | Personal Access Token | 🔨 needs token |
+| **DocuSign** | Envelope status + send document (`/docs/envelopes`) | JWT Grant | 🔨 needs app + consent |
 
-Access steps for these two are in Sections 5–6 below.
+Access steps for all four are in Sections 5–8 below.
 
 ## 3. Connected to your Claude workspace
 
@@ -69,10 +71,9 @@ APIs you could integrate into this service the same way we did Google Ads / Ring
 
 **Connector-only / thin for direct integration:** Adzviser, Plaud.
 
-**Recommended next building blocks** (given the lead-gen + calls direction):
-**DocuSign** (automate engagement letters) and **Calendly** (consultation booking →
-Slack/CRM). Both slot into the same env-var + optional-endpoint pattern already used
-in the app.
+**Recommended next building blocks** — ✅ **DocuSign** and **Calendly** are now
+scaffolded in this branch (see Sections 7–8). Both slot into the same env-var +
+optional-endpoint pattern already used in the app.
 
 ---
 
@@ -127,7 +128,36 @@ optional `RINGCENTRAL_SERVER_URL`. Test with `GET /calls/log`.
 
 ---
 
-## 7. How new integrations plug in
+## 7. Getting access: Calendly API
+
+Reads upcoming consultations so they can be surfaced (e.g. to Slack). Personal
+Access Token — no OAuth flow.
+
+1. Calendly → **Integrations → API & Webhooks → Personal Access Tokens**.
+2. Generate a token → set `CALENDLY_API_TOKEN`. Test with `GET /calendly/events`.
+
+## 8. Getting access: DocuSign eSignature API
+
+Automates documents like engagement letters. JWT Grant (impersonation) — right for a
+headless service.
+
+1. **Developer account** — [developers.docusign.com](https://developers.docusign.com)
+   (starts in demo).
+2. **App + integration key** — Admin → Apps and Keys → Add App. Note the integration
+   key and API account ID.
+3. **RSA keypair** — generate on the app; keep the private key for
+   `DOCUSIGN_PRIVATE_KEY`.
+4. **API user ID** — the GUID (API Username) of the user to impersonate.
+5. **Admin consent (one-time)** — visit the consent URL for your integration key with
+   scope `signature impersonation`, or JWT auth returns `consent_required`.
+6. **Go live** — promote demo → production; switch `DOCUSIGN_BASE_URL` /
+   `DOCUSIGN_OAUTH_BASE` to production hosts.
+
+**Env vars:** `DOCUSIGN_INTEGRATION_KEY`, `DOCUSIGN_USER_ID`, `DOCUSIGN_ACCOUNT_ID`,
+`DOCUSIGN_PRIVATE_KEY`, `DOCUSIGN_BASE_URL`, optional `DOCUSIGN_OAUTH_BASE`. Test with
+`GET /docs/envelopes`.
+
+## 9. How new integrations plug in
 
 Every integration in this app follows the same pattern, so adding more is mechanical:
 

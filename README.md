@@ -102,6 +102,13 @@ Optional integrations (see **Google Ads API** and **RingCentral API** below):
 | `RINGCENTRAL_CLIENT_SECRET` | App Client Secret |
 | `RINGCENTRAL_JWT` | Personal JWT credential (assertion string) |
 | `RINGCENTRAL_SERVER_URL` | `https://platform.ringcentral.com` (prod) or the devtest URL (optional) |
+| `CALENDLY_API_TOKEN` | Calendly Personal Access Token |
+| `DOCUSIGN_INTEGRATION_KEY` | DocuSign app integration key (client ID) |
+| `DOCUSIGN_USER_ID` | GUID of the user to impersonate (API Username) |
+| `DOCUSIGN_ACCOUNT_ID` | DocuSign API account ID |
+| `DOCUSIGN_PRIVATE_KEY` | RSA private key (PEM) |
+| `DOCUSIGN_BASE_URL` | `https://demo.docusign.net` (demo) or your prod base URI |
+| `DOCUSIGN_OAUTH_BASE` | `account-d.docusign.com` (demo) / `account.docusign.com` (prod) (optional) |
 
 > Leave any of these unset to disable that integration cleanly — the service
 > starts fine and the related endpoints simply return `{"status": "disabled"}`.
@@ -169,6 +176,8 @@ Since Drive webhooks expire, Zapier is a reliable alternative trigger:
 | `/analyze/file/{file_id}` | POST | Analyze a specific file by Drive ID |
 | `/ads/report?days=30` | GET | Google Ads per-campaign performance (if configured) |
 | `/calls/log?per_page=100` | GET | RingCentral recent call log (if configured) |
+| `/calendly/events?count=20` | GET | Upcoming Calendly consultations (if configured) |
+| `/docs/envelopes?from_date=YYYY-MM-DD` | GET | DocuSign envelope statuses (if configured) |
 
 ---
 
@@ -222,6 +231,44 @@ SMS. Uses **JWT auth**, ideal for a headless service (no login UI needed).
    approval to use real account data (set `RINGCENTRAL_SERVER_URL` accordingly).
 
 Set the `RINGCENTRAL_*` variables above. Test with `GET /calls/log`.
+
+---
+
+## Optional: Calendly API
+
+Reads upcoming consultations so they can be surfaced (e.g. to Slack). Uses a
+Personal Access Token — no OAuth flow.
+
+**What to request / set up:**
+
+1. Sign in to Calendly → **Integrations → API & Webhooks → Personal Access Tokens**.
+2. Generate a token and paste it as `CALENDLY_API_TOKEN`.
+
+Test with `GET /calendly/events?count=20`.
+
+---
+
+## Optional: DocuSign eSignature API
+
+Automates documents like engagement letters. Uses **JWT Grant** (impersonation) —
+the right flow for a headless service.
+
+**What to request / set up:**
+
+1. **A DocuSign developer account** — [developers.docusign.com](https://developers.docusign.com)
+   (starts in the demo environment).
+2. **An app + integration key** — Admin → Apps and Keys → Add App. Note the
+   **integration key** and your **API account ID**.
+3. **An RSA keypair** — generate it on the app; keep the **private key** for
+   `DOCUSIGN_PRIVATE_KEY`.
+4. **Your API user ID** — the GUID (API Username) of the user to impersonate.
+5. **Grant admin consent (one-time)** — visit the consent URL for your integration
+   key with scope `signature impersonation` and approve, or JWT auth returns
+   `consent_required`.
+6. **Go live** — promote the app from demo to production and switch
+   `DOCUSIGN_BASE_URL` / `DOCUSIGN_OAUTH_BASE` to the production hosts.
+
+Set the `DOCUSIGN_*` variables above. Test with `GET /docs/envelopes`.
 
 ---
 
