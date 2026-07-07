@@ -4,6 +4,9 @@ AI-powered analysis of body cam and in-car (dashcam) video evidence.
 Watches a Google Drive folder, auto-processes new videos, and posts
 a complete defense-focused legal analysis to Slack.
 
+> **Integrations & developer-API reference:** see [`docs/INTEGRATIONS.md`](docs/INTEGRATIONS.md)
+> for the full stack inventory, which services have developer APIs, and access steps.
+
 ---
 
 ## What It Does
