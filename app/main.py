@@ -18,6 +18,8 @@ from app.video_processor import VideoProcessor
 from app.transcriber import Transcriber
 from app.analyzer import VideoAnalyzer
 from app.email_notifier import EmailNotifier
+from app.google_ads_client import GoogleAdsClient
+from app.ringcentral_client import RingCentralClient
 
 logging.basicConfig(
     level=logging.INFO,
@@ -36,6 +38,8 @@ transcriber: Transcriber = None
 analyzer: VideoAnalyzer = None
 notifier: EmailNotifier = None
 processor: VideoProcessor = None
+google_ads: GoogleAdsClient = None
+ringcentral: RingCentralClient = None
 
 SUPPORTED_VIDEO_TYPES = {
     "video/mp4", "video/quicktime", "video/x-msvideo",
@@ -52,18 +56,46 @@ SUPPORTED_EXTENSIONS = {
 @app.on_event("startup")
 async def startup():
     global drive_client, transcriber, analyzer, notifier, processor
+    global google_ads, ringcentral
     log.info("Initializing Case Video Analyzer...")
     drive_client = DriveClient()
     transcriber = Transcriber()
     analyzer = VideoAnalyzer()
     notifier = EmailNotifier()
     processor = VideoProcessor()
+    google_ads = GoogleAdsClient()
+    ringcentral = RingCentralClient()
     log.info("All clients initialized. Ready.")
 
 
 @app.get("/health")
 async def health():
-    return {"status": "ok", "service": "case-video-analyzer"}
+    return {
+        "status": "ok",
+        "service": "case-video-analyzer",
+        "integrations": {
+            "google_ads": bool(google_ads and google_ads.enabled),
+            "ringcentral": bool(ringcentral and ringcentral.enabled),
+        },
+    }
+
+
+@app.get("/ads/report")
+async def ads_report(days: int = 30):
+    """Per-campaign Google Ads performance for the trailing `days` window."""
+    if not (google_ads and google_ads.enabled):
+        return JSONResponse({"status": "disabled", "detail": "GOOGLE_ADS_* env vars not set"})
+    rows = await google_ads.get_campaign_performance(days=days)
+    return JSONResponse({"status": "ok", "days": days, "campaigns": rows})
+
+
+@app.get("/calls/log")
+async def calls_log(per_page: int = 100):
+    """Recent RingCentral call-log records for the authenticated extension."""
+    if not (ringcentral and ringcentral.enabled):
+        return JSONResponse({"status": "disabled", "detail": "RINGCENTRAL_* env vars not set"})
+    records = await ringcentral.get_call_log(per_page=per_page)
+    return JSONResponse({"status": "ok", "count": len(records), "records": records})
 
 
 @app.post("/analyze/file/{file_id}")
