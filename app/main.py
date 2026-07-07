@@ -18,6 +18,10 @@ from app.video_processor import VideoProcessor
 from app.transcriber import Transcriber
 from app.analyzer import VideoAnalyzer
 from app.email_notifier import EmailNotifier
+from app.google_ads_client import GoogleAdsClient
+from app.ringcentral_client import RingCentralClient
+from app.calendly_client import CalendlyClient
+from app.docusign_client import DocuSignClient
 
 logging.basicConfig(
     level=logging.INFO,
@@ -36,6 +40,10 @@ transcriber: Transcriber = None
 analyzer: VideoAnalyzer = None
 notifier: EmailNotifier = None
 processor: VideoProcessor = None
+google_ads: GoogleAdsClient = None
+ringcentral: RingCentralClient = None
+calendly: CalendlyClient = None
+docusign: DocuSignClient = None
 
 SUPPORTED_VIDEO_TYPES = {
     "video/mp4", "video/quicktime", "video/x-msvideo",
@@ -52,18 +60,68 @@ SUPPORTED_EXTENSIONS = {
 @app.on_event("startup")
 async def startup():
     global drive_client, transcriber, analyzer, notifier, processor
+    global google_ads, ringcentral, calendly, docusign
     log.info("Initializing Case Video Analyzer...")
     drive_client = DriveClient()
     transcriber = Transcriber()
     analyzer = VideoAnalyzer()
     notifier = EmailNotifier()
     processor = VideoProcessor()
+    google_ads = GoogleAdsClient()
+    ringcentral = RingCentralClient()
+    calendly = CalendlyClient()
+    docusign = DocuSignClient()
     log.info("All clients initialized. Ready.")
 
 
 @app.get("/health")
 async def health():
-    return {"status": "ok", "service": "case-video-analyzer"}
+    return {
+        "status": "ok",
+        "service": "case-video-analyzer",
+        "integrations": {
+            "google_ads": bool(google_ads and google_ads.enabled),
+            "ringcentral": bool(ringcentral and ringcentral.enabled),
+            "calendly": bool(calendly and calendly.enabled),
+            "docusign": bool(docusign and docusign.enabled),
+        },
+    }
+
+
+@app.get("/ads/report")
+async def ads_report(days: int = 30):
+    """Per-campaign Google Ads performance for the trailing `days` window."""
+    if not (google_ads and google_ads.enabled):
+        return JSONResponse({"status": "disabled", "detail": "GOOGLE_ADS_* env vars not set"})
+    rows = await google_ads.get_campaign_performance(days=days)
+    return JSONResponse({"status": "ok", "days": days, "campaigns": rows})
+
+
+@app.get("/calls/log")
+async def calls_log(per_page: int = 100):
+    """Recent RingCentral call-log records for the authenticated extension."""
+    if not (ringcentral and ringcentral.enabled):
+        return JSONResponse({"status": "disabled", "detail": "RINGCENTRAL_* env vars not set"})
+    records = await ringcentral.get_call_log(per_page=per_page)
+    return JSONResponse({"status": "ok", "count": len(records), "records": records})
+
+
+@app.get("/calendly/events")
+async def calendly_events(count: int = 20):
+    """Upcoming Calendly consultations for the token owner."""
+    if not (calendly and calendly.enabled):
+        return JSONResponse({"status": "disabled", "detail": "CALENDLY_API_TOKEN not set"})
+    events = await calendly.list_scheduled_events(count=count)
+    return JSONResponse({"status": "ok", "count": len(events), "events": events})
+
+
+@app.get("/docs/envelopes")
+async def docs_envelopes(from_date: str = "2024-01-01"):
+    """DocuSign envelopes (with status) created since from_date (YYYY-MM-DD)."""
+    if not (docusign and docusign.enabled):
+        return JSONResponse({"status": "disabled", "detail": "DOCUSIGN_* env vars not set"})
+    envelopes = await docusign.list_envelopes(from_date=from_date)
+    return JSONResponse({"status": "ok", "count": len(envelopes), "envelopes": envelopes})
 
 
 @app.post("/analyze/file/{file_id}")
