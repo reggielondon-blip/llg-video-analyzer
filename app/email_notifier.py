@@ -1,7 +1,6 @@
 """
-EmailNotifier — Sends analysis complete alerts via Gmail SMTP.
-No third-party services. Uses the firm's existing Gmail account
-with an app-specific password (not the main account password).
+EmailNotifier — Sends analysis alerts using SMTP or the configured Zapier HTTPS route.
+Zapier uses the existing Gmail connection and does not need a Gmail app password.
 
 Required env vars:
     NOTIFY_EMAIL_FROM     — Gmail address sending the notification
@@ -16,19 +15,31 @@ import smtplib
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 from datetime import datetime
+from app.email_transport import ZapierEmailTransport, NotificationError
 
 log = logging.getLogger("email-notifier")
 
 FROM_EMAIL = os.getenv("NOTIFY_EMAIL_FROM", "")
 PASSWORD   = os.getenv("NOTIFY_EMAIL_PASSWORD", "")
 TO_EMAIL   = os.getenv("NOTIFY_EMAIL_TO", "info@landllawgroup.com")
+TRANSPORT = os.getenv("NOTIFY_EMAIL_TRANSPORT", "smtp").strip().lower()
+ZAPIER_URL = os.getenv("ZAPIER_MCP_URL", "")
+ZAPIER_CONNECTION = os.getenv("NOTIFY_ZAPIER_CONNECTION_ID", "")
+
+
+def _configured():
+    if TRANSPORT == "zapier":
+        return all([FROM_EMAIL, TO_EMAIL, ZAPIER_URL, ZAPIER_CONNECTION])
+    if TRANSPORT == "smtp":
+        return all([FROM_EMAIL, TO_EMAIL, PASSWORD])
+    raise NotificationError("Unsupported email transport")
 
 
 class EmailNotifier:
 
     def __init__(self):
-        if not all([FROM_EMAIL, PASSWORD]):
-            log.warning("NOTIFY_EMAIL_FROM or NOTIFY_EMAIL_PASSWORD not set — email notifications disabled")
+        if not _configured():
+            log.warning("Email transport is not fully configured — notifications disabled")
 
     async def post_analysis_complete(
         self,
@@ -38,7 +49,7 @@ class EmailNotifier:
         duration_seconds: float,
         transcript_chars: int
     ):
-        if not all([FROM_EMAIL, PASSWORD]):
+        if not _configured():
             log.info("Email not configured — skipping notification")
             return
 
@@ -72,10 +83,10 @@ and Recommended Follow-up Actions.
 — L & L Law Group Case Video Analyzer
 """
 
-        await asyncio.to_thread(_send, subject, body)
+        return await asyncio.to_thread(_send, subject, body)
 
     async def post_error(self, file_id: str, error: str):
-        if not all([FROM_EMAIL, PASSWORD]):
+        if not _configured():
             return
         subject = f"[L&L] Video Analyzer Error — File {file_id[:12]}..."
         body    = f"""L & L Law Group — Video Analyzer Error
@@ -86,11 +97,18 @@ Error:   {error[:500]}
 Check Railway logs for full details.
 Service URL: https://railway.app
 """
-        await asyncio.to_thread(_send, subject, body)
+        return await asyncio.to_thread(_send, subject, body)
 
 
 def _send(subject: str, body: str):
     try:
+        if not _configured():
+            log.warning("Email transport not configured; nothing sent")
+            return None
+        if TRANSPORT == "zapier":
+            receipt = ZapierEmailTransport(ZAPIER_URL, ZAPIER_CONNECTION, FROM_EMAIL, TO_EMAIL).send(subject, body)
+            log.info("Email accepted by Gmail via HTTPS; message_id=%s", receipt)
+            return receipt
         msg = MIMEMultipart()
         msg["From"]    = FROM_EMAIL
         msg["To"]      = TO_EMAIL
@@ -102,8 +120,13 @@ def _send(subject: str, body: str):
             server.sendmail(FROM_EMAIL, TO_EMAIL, msg.as_string())
 
         log.info(f"Email sent to {TO_EMAIL}: {subject}")
+        return True
+    except NotificationError as e:
+        log.error("Email notification failed: %s", e)
+        return None
     except Exception as e:
-        log.error(f"Email send failed: {e}")
+        log.error("Email notification failed (%s); not retried", type(e).__name__)
+        return None
 
 
 def _format_duration(seconds: float) -> str:
