@@ -10,6 +10,7 @@ Required env vars:
 """
 
 import os
+import asyncio
 import logging
 import smtplib
 from email.mime.text import MIMEText
@@ -71,7 +72,7 @@ and Recommended Follow-up Actions.
 — L & L Law Group Case Video Analyzer
 """
 
-        _send(subject, body)
+        await asyncio.to_thread(_send, subject, body)
 
     async def post_error(self, file_id: str, error: str):
         if not all([FROM_EMAIL, PASSWORD]):
@@ -85,7 +86,7 @@ Error:   {error[:500]}
 Check Railway logs for full details.
 Service URL: https://railway.app
 """
-        _send(subject, body)
+        await asyncio.to_thread(_send, subject, body)
 
 
 def _send(subject: str, body: str):
@@ -96,7 +97,7 @@ def _send(subject: str, body: str):
         msg["Subject"] = subject
         msg.attach(MIMEText(body, "plain"))
 
-        with smtplib.SMTP_SSL("smtp.gmail.com", 465) as server:
+        with smtplib.SMTP_SSL("smtp.gmail.com", 465, timeout=10) as server:
             server.login(FROM_EMAIL, PASSWORD)
             server.sendmail(FROM_EMAIL, TO_EMAIL, msg.as_string())
 

@@ -37,21 +37,21 @@ class Transcriber:
         Falls back to plain text if diarization fails.
         """
         if not ASSEMBLYAI_API_KEY:
-            return "[Transcription skipped — ASSEMBLYAI_API_KEY not configured]"
+            raise RuntimeError("ASSEMBLYAI_API_KEY not configured")
 
         file_size_mb = os.path.getsize(audio_path) / (1024 * 1024)
         log.info(f"Uploading audio ({file_size_mb:.1f}MB) to AssemblyAI...")
 
-        async with aiohttp.ClientSession() as session:
+        async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=120)) as session:
             # ── Step 1: Upload audio file ─────────────────────────────────
             upload_url = await self._upload_file(session, audio_path)
             if not upload_url:
-                return "[Audio upload failed]"
+                raise RuntimeError("Audio upload failed")
 
             # ── Step 2: Request transcription with diarization ────────────
             transcript_id = await self._request_transcript(session, upload_url)
             if not transcript_id:
-                return "[Transcription request failed]"
+                raise RuntimeError("Transcription request failed")
 
             log.info(f"Transcription job started: {transcript_id}")
 
@@ -154,10 +154,13 @@ class Transcriber:
         status = result.get("status", "unknown")
 
         if status == "timeout":
-            return "[Transcription timed out — video may be too long]"
+            raise RuntimeError("Transcription timed out")
 
         if status == "error":
-            return f"[Transcription failed: {result.get('error', 'unknown error')}]"
+            raise RuntimeError(f"Transcription failed: {result.get('error', 'unknown error')}")
+
+        if status != "completed":
+            raise RuntimeError(f"Transcription not completed: {status}")
 
         # Prefer utterance-level (speaker-labeled) format
         utterances = result.get("utterances") or []
@@ -172,7 +175,7 @@ class Transcriber:
             return "\n".join(lines)
 
         # Fallback: plain text
-        return result.get("text", "[No transcript available]") or "[Empty transcript]"
+        return result.get("text", "") or ""
 
     @staticmethod
     def _ms_to_timestamp(ms: int) -> str:

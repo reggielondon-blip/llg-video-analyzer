@@ -7,6 +7,8 @@ Tuned for body cam and in-car dashcam footage:
 """
 
 import os
+import json
+import math
 import subprocess
 import logging
 from pathlib import Path
@@ -33,10 +35,30 @@ class VideoProcessor:
         Returns:
             (audio_path, frame_paths, duration_seconds)
         """
-        duration = self._get_duration(video_path)
-        audio_path = self._extract_audio(video_path, output_dir)
+        duration, has_audio = self._probe(video_path)
+        audio_path = self._extract_audio(video_path, output_dir) if has_audio else None
+        if has_audio and not audio_path:
+            raise RuntimeError("Audio extraction failed; analysis was not generated")
         frame_paths = self._extract_frames(video_path, output_dir, duration)
+        if not frame_paths:
+            raise RuntimeError("No video frames decoded; analysis was not generated")
         return audio_path, frame_paths, duration
+
+    def _probe(self, video_path: str):
+        result = subprocess.run(
+            ["ffprobe", "-v", "error", "-show_format", "-show_streams", "-of", "json", video_path],
+            capture_output=True, text=True, timeout=30,
+        )
+        if result.returncode:
+            raise ValueError("Unreadable video: " + result.stderr[-500:].strip())
+        metadata = json.loads(result.stdout)
+        streams = metadata.get("streams", [])
+        if not any(s.get("codec_type") == "video" for s in streams):
+            raise ValueError("File contains no video stream")
+        duration = float(metadata.get("format", {}).get("duration", 0))
+        if not math.isfinite(duration) or duration <= 0:
+            raise ValueError("Video has no valid duration")
+        return duration, any(s.get("codec_type") == "audio" for s in streams)
 
     # ── Duration ─────────────────────────────────────────────────────────────
     def _get_duration(self, video_path: str) -> float:
@@ -119,7 +141,7 @@ class VideoProcessor:
                 "ffmpeg", "-y",
                 "-i", video_path,
                 "-vf", (
-                    f"fps=1/{interval:.2f},"        # 1 frame per interval
+                    f"fps=1/{interval:.6f}:start_time=0:round=up,"        # 1 frame per interval
                     "scale=1280:-2,"                 # max 1280px wide
                     "format=yuvj420p"                # compatible color space
                 ),
