@@ -37,6 +37,9 @@ analyzer: VideoAnalyzer = None
 notifier: EmailNotifier = None
 processor: VideoProcessor = None
 
+# Serialize jobs: shared Drive client and memory-heavy media processing.
+processing_lock = asyncio.Lock()
+
 SUPPORTED_VIDEO_TYPES = {
     "video/mp4", "video/quicktime", "video/x-msvideo",
     "video/x-matroska", "video/webm", "video/mpeg",
@@ -81,7 +84,8 @@ async def analyze_folder(background_tasks: BackgroundTasks):
 
 async def scan_and_process_new_videos(source: str = "manual"):
     try:
-        files = drive_client.list_unprocessed_videos()
+        async with processing_lock:
+            files = await asyncio.to_thread(drive_client.list_unprocessed_videos)
         log.info(f"Found {len(files)} unprocessed video(s) (triggered by: {source})")
         for f in files:
             await process_video_file(f["id"])
@@ -90,10 +94,15 @@ async def scan_and_process_new_videos(source: str = "manual"):
 
 
 async def process_video_file(file_id: str):
+    async with processing_lock:
+        await _process_video_file(file_id)
+
+
+async def _process_video_file(file_id: str):
     tmp_dir = None
     try:
         # ── 1. Get file metadata ──────────────────────────────────────────
-        meta = drive_client.get_file_info(file_id)
+        meta = await asyncio.to_thread(drive_client.get_file_info, file_id)
         file_name = meta.get("name", file_id)
         mime_type = meta.get("mimeType", "")
         parents = meta.get("parents", [])
@@ -106,16 +115,20 @@ async def process_video_file(file_id: str):
             log.info(f"Skipping non-video file: {file_name}")
             return
 
+        if meta.get("appProperties", {}).get("llg_analyzed") == "true":
+            log.info("Skipping already processed video: %s", file_id)
+            return
+
         # ── 2. Download video ─────────────────────────────────────────────
         tmp_dir = tempfile.mkdtemp(prefix="llg_video_")
-        video_path = os.path.join(tmp_dir, file_name)
+        video_path = os.path.join(tmp_dir, "source" + ext)
         log.info(f"Downloading to {video_path}...")
-        drive_client.download_file(file_id, video_path)
+        await asyncio.to_thread(drive_client.download_file, file_id, video_path)
 
         # ── 3. Extract audio + frames ─────────────────────────────────────
         log.info("Extracting audio and key frames...")
-        audio_path, frame_paths, duration_seconds = processor.extract(
-            video_path, tmp_dir
+        audio_path, frame_paths, duration_seconds = await asyncio.to_thread(
+            processor.extract, video_path, tmp_dir
         )
         log.info(f"Duration: {duration_seconds:.0f}s | Frames: {len(frame_paths)}")
 
@@ -126,7 +139,7 @@ async def process_video_file(file_id: str):
             transcript = await transcriber.transcribe(audio_path)
             log.info(f"Transcript length: {len(transcript)} chars")
         else:
-            log.warning("No audio extracted — skipping transcription")
+            log.info("Video has no audio stream — visual-only analysis")
 
         # ── 5. Analyze with Claude ────────────────────────────────────────
         log.info("Sending to Claude for legal analysis...")
@@ -140,8 +153,12 @@ async def process_video_file(file_id: str):
 
         # ── 6. Save analysis to Drive ─────────────────────────────────────
         log.info("Saving analysis to Drive...")
-        view_link = drive_client.upload_analysis(analysis, file_id, file_name)
+        view_link = await asyncio.to_thread(drive_client.upload_analysis, analysis, file_id, file_name)
         log.info(f"Analysis saved: {view_link}")
+
+        # Save successful state before optional notification, avoiding duplicate reports
+        # when a notification fails. Upstream failures never reach this point.
+        await asyncio.to_thread(drive_client.mark_as_processed, file_id)
 
         # — 6b. Notify via email —
         await notifier.post_analysis_complete(
@@ -153,7 +170,6 @@ async def process_video_file(file_id: str):
         )
 
         # ── 7. Mark as processed ──────────────────────────────────────────
-        drive_client.mark_as_processed(file_id)
         log.info(f"Pipeline complete for: {file_name}")
 
     except Exception as e:

@@ -59,7 +59,7 @@ FRAMES CAPTURED: {num_frames} key frames provided
 
 ---
 AUDIO TRANSCRIPT:
-{transcript if transcript else '[No audio transcript available — silent video or audio extraction failed]'}
+{transcript if transcript else '[No speech transcript available; do not infer spoken words]'}
 ---
 
 {num_frames} key frames from the video are attached as images (chronological order, evenly spaced throughout the video).
@@ -79,7 +79,7 @@ FILE: {file_name}
    - Subjects/parties identified (descriptions, names if stated)
 
 2. CHRONOLOGICAL EVENT TIMELINE
-   List key events with timestamps (MM:SS) from the transcript or estimated from frames.
+   List key events with timestamps (MM:SS) only when supplied in the transcript or visible in a frame. Do not invent frame timestamps.
    Be specific — note exact commands given, responses made, actions taken.
 
 3. STOP & DETENTION ANALYSIS
@@ -164,10 +164,16 @@ class VideoAnalyzer:
         Send transcript + frames to Claude and return the legal analysis.
         """
         if not self.api_key:
-            return "[Analysis skipped — ANTHROPIC_API_KEY not configured]"
+            raise RuntimeError("ANTHROPIC_API_KEY not configured")
 
         # Limit frames sent to Claude
-        frames_to_send = frame_paths[:MAX_FRAMES_TO_CLAUDE]
+        if not transcript.strip() and not frame_paths:
+            raise ValueError("No transcript or video frames available for analysis")
+        # Preserve coverage of the end of long videos as well as the beginning.
+        frames_to_send = frame_paths
+        if len(frame_paths) > MAX_FRAMES_TO_CLAUDE:
+            frames_to_send = [frame_paths[round(i * (len(frame_paths) - 1) / (MAX_FRAMES_TO_CLAUDE - 1))]
+                              for i in range(MAX_FRAMES_TO_CLAUDE)]
         prompt = build_analysis_prompt(
             file_name, transcript, duration_seconds, len(frames_to_send)
         )
@@ -178,6 +184,8 @@ class VideoAnalyzer:
         # Add frames as images
         for frame_path in frames_to_send:
             img_b64 = _encode_image(frame_path)
+            if not img_b64:
+                raise RuntimeError("Could not read an extracted video frame")
             if img_b64:
                 content.append({
                     "type": "image",
@@ -220,20 +228,23 @@ class VideoAnalyzer:
                     if resp.status != 200:
                         body = await resp.text()
                         log.error(f"Claude API error {resp.status}: {body[:500]}")
-                        return f"[Analysis failed — Claude API returned {resp.status}]"
+                        raise RuntimeError(f"Claude API returned {resp.status}")
 
                     data = await resp.json()
                     text_blocks = [
                         b["text"] for b in data.get("content", [])
                         if b.get("type") == "text"
                     ]
-                    return "\n".join(text_blocks)
+                    text = "\n".join(text_blocks).strip()
+                    if not text or data.get("stop_reason") != "end_turn":
+                        raise RuntimeError("Claude did not return a complete analysis")
+                    return text
 
         except asyncio.TimeoutError:
-            return "[Analysis timed out — video may be unusually complex]"
+            raise RuntimeError("Analysis timed out")
         except Exception as e:
             log.error(f"Claude API call failed: {e}", exc_info=True)
-            return f"[Analysis error: {str(e)}]"
+            raise
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
