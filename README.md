@@ -109,9 +109,9 @@ Optional integrations (see **Google Ads API** and **RingCentral API** below):
 | `DOCUSIGN_PRIVATE_KEY` | RSA private key (PEM) |
 | `DOCUSIGN_BASE_URL` | `https://demo.docusign.net` (demo) or your prod base URI |
 | `DOCUSIGN_OAUTH_BASE` | `account-d.docusign.com` (demo) / `account.docusign.com` (prod) (optional) |
+| `INTEGRATIONS_API_TOKEN` | Bearer token required on the four integration GET routes |
 
-> Leave any of these unset to disable that integration cleanly — the service
-> starts fine and the related endpoints simply return `{"status": "disabled"}`.
+> Vendor vars unset still disable that integration; the four GETs also stay closed until `INTEGRATIONS_API_TOKEN` is set (HTTP 503), a bad bearer returns 401, and `send_sms` / `send_document` are not HTTP endpoints.
 
 4. Railway will build and deploy automatically (uses Dockerfile with FFmpeg)
 5. Note your Railway public URL: `https://your-service.up.railway.app`
@@ -174,10 +174,10 @@ Since Drive webhooks expire, Zapier is a reliable alternative trigger:
 | `/webhook/drive` | POST | Google Drive push notification receiver |
 | `/analyze/folder` | POST | Manually scan watch folder for new videos |
 | `/analyze/file/{file_id}` | POST | Analyze a specific file by Drive ID |
-| `/ads/report?days=30` | GET | Google Ads per-campaign performance (if configured) |
-| `/calls/log?per_page=100` | GET | RingCentral recent call log (if configured) |
-| `/calendly/events?count=20` | GET | Upcoming Calendly consultations (if configured) |
-| `/docs/envelopes?from_date=YYYY-MM-DD` | GET | DocuSign envelope statuses (if configured) |
+| `/ads/report?days=30` | GET | Google Ads per-campaign performance (bearer token required) |
+| `/calls/log?per_page=100` | GET | RingCentral recent call log (bearer token required) |
+| `/calendly/events?count=20` | GET | Upcoming Calendly consultations (bearer token required) |
+| `/docs/envelopes?from_date=YYYY-MM-DD` | GET | DocuSign envelope statuses (bearer token required) |
 
 ---
 

@@ -26,7 +26,6 @@ Requires PyJWT with the crypto extra (see requirements.txt) for RS256 signing.
 
 import os
 import time
-import base64
 import logging
 import aiohttp
 from typing import Dict, List, Optional

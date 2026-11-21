@@ -10,7 +10,7 @@ import logging
 import tempfile
 import asyncio
 from pathlib import Path
-from fastapi import FastAPI, BackgroundTasks
+from fastapi import FastAPI, BackgroundTasks, Header
 from fastapi.responses import JSONResponse
 
 from app.drive_client import DriveClient
@@ -22,6 +22,7 @@ from app.google_ads_client import GoogleAdsClient
 from app.ringcentral_client import RingCentralClient
 from app.calendly_client import CalendlyClient
 from app.docusign_client import DocuSignClient
+from app.integration_gate import auth_status, clamp_int, valid_date
 
 logging.basicConfig(
     level=logging.INFO,
@@ -91,38 +92,74 @@ async def health():
     }
 
 
+def _integration_guard(authorization: str | None):
+    """Close integration reads until a configured bearer token matches."""
+    status = auth_status(authorization)
+    if status == "unconfigured":
+        return JSONResponse(
+            {"detail": "Set INTEGRATIONS_API_TOKEN before reading integration data"},
+            status_code=503,
+        )
+    if status == "unauthorized":
+        return JSONResponse({"status": "unauthorized"}, status_code=401)
+    return None
+
+
 @app.get("/ads/report")
-async def ads_report(days: int = 30):
+async def ads_report(days: int = 30, authorization: str | None = Header(default=None)):
     """Per-campaign Google Ads performance for the trailing `days` window."""
+    blocked = _integration_guard(authorization)
+    if blocked is not None:
+        return blocked
     if not (google_ads and google_ads.enabled):
         return JSONResponse({"status": "disabled", "detail": "GOOGLE_ADS_* env vars not set"})
+    days = clamp_int(days, 1, 90)
     rows = await google_ads.get_campaign_performance(days=days)
     return JSONResponse({"status": "ok", "days": days, "campaigns": rows})
 
 
 @app.get("/calls/log")
-async def calls_log(per_page: int = 100):
+async def calls_log(per_page: int = 100, authorization: str | None = Header(default=None)):
     """Recent RingCentral call-log records for the authenticated extension."""
+    blocked = _integration_guard(authorization)
+    if blocked is not None:
+        return blocked
     if not (ringcentral and ringcentral.enabled):
         return JSONResponse({"status": "disabled", "detail": "RINGCENTRAL_* env vars not set"})
+    per_page = clamp_int(per_page, 1, 100)
     records = await ringcentral.get_call_log(per_page=per_page)
     return JSONResponse({"status": "ok", "count": len(records), "records": records})
 
 
 @app.get("/calendly/events")
-async def calendly_events(count: int = 20):
+async def calendly_events(count: int = 20, authorization: str | None = Header(default=None)):
     """Upcoming Calendly consultations for the token owner."""
+    blocked = _integration_guard(authorization)
+    if blocked is not None:
+        return blocked
     if not (calendly and calendly.enabled):
         return JSONResponse({"status": "disabled", "detail": "CALENDLY_API_TOKEN not set"})
+    count = clamp_int(count, 1, 100)
     events = await calendly.list_scheduled_events(count=count)
     return JSONResponse({"status": "ok", "count": len(events), "events": events})
 
 
 @app.get("/docs/envelopes")
-async def docs_envelopes(from_date: str = "2024-01-01"):
+async def docs_envelopes(
+    from_date: str = "2024-01-01",
+    authorization: str | None = Header(default=None),
+):
     """DocuSign envelopes (with status) created since from_date (YYYY-MM-DD)."""
+    blocked = _integration_guard(authorization)
+    if blocked is not None:
+        return blocked
     if not (docusign and docusign.enabled):
         return JSONResponse({"status": "disabled", "detail": "DOCUSIGN_* env vars not set"})
+    if not valid_date(from_date):
+        return JSONResponse(
+            {"status": "error", "detail": "from_date must be YYYY-MM-DD"},
+            status_code=400,
+        )
     envelopes = await docusign.list_envelopes(from_date=from_date)
     return JSONResponse({"status": "ok", "count": len(envelopes), "envelopes": envelopes})
 

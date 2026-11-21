@@ -28,9 +28,11 @@ wiring in — exactly what to request to get access.
 | Service | New capability | Auth | Status |
 |---|---|---|---|
 | **Google Ads** | Per-campaign performance reporting (`/ads/report`) | OAuth2 refresh token | 🔨 needs dev token + tokens |
-| **RingCentral** | Call log + SMS (`/calls/log`) | JWT | 🔨 needs app + JWT credential |
+| **RingCentral** | Call log (`/calls/log`). SMS (`send_sms`) is not an HTTP route | JWT | 🔨 needs app + JWT credential |
 | **Calendly** | Upcoming consultations (`/calendly/events`) | Personal Access Token | 🔨 needs token |
-| **DocuSign** | Envelope status + send document (`/docs/envelopes`) | JWT Grant | 🔨 needs app + consent |
+| **DocuSign** | Envelope status (`/docs/envelopes`). Send-document (`send_document`) is not an HTTP route | JWT Grant | 🔨 needs app + consent |
+
+Those GETs require `Authorization: Bearer INTEGRATIONS_API_TOKEN` (503 if unset, 401 if bad).
 
 Access steps for all four are in Sections 5–8 below.
 
