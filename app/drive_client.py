@@ -9,6 +9,7 @@ Required env var:
 """
 
 import os
+import hashlib
 import io
 import json
 import logging
@@ -82,6 +83,7 @@ class DriveClient:
 
     # ── Download a file (works for both My Drive and Shared Drives) ───────────
     def download_file(self, file_id: str, dest_path: str) -> str:
+        meta = self.get_file_info(file_id)
         request = self.service.files().get_media(
             fileId=file_id,
             supportsAllDrives=True,
@@ -91,7 +93,17 @@ class DriveClient:
             done = False
             while not done:
                 _, done = downloader.next_chunk()
-        log.info(f"Downloaded file {file_id} → {dest_path}")
+        expected_size = meta.get("size")
+        if expected_size is not None and os.path.getsize(dest_path) != int(expected_size):
+            raise ValueError("Drive download size mismatch; analysis was not generated")
+        if meta.get("md5Checksum"):
+            digest = hashlib.md5()
+            with open(dest_path, "rb") as downloaded:
+                for chunk in iter(lambda: downloaded.read(1024 * 1024), b""):
+                    digest.update(chunk)
+            if digest.hexdigest() != meta["md5Checksum"]:
+                raise ValueError("Drive download checksum mismatch; analysis was not generated")
+        log.info(f"Downloaded and verified file {file_id} → {dest_path}")
         return dest_path
 
     # ── Upload analysis result back to Drive ──────────────────────────────────
@@ -104,7 +116,7 @@ class DriveClient:
         parents = file_meta.get("parents", [])
         analysis_name = original_name.rsplit(".", 1)[0] + "_ANALYSIS.txt"
 
-        with tempfile.NamedTemporaryFile(mode="w", suffix=".txt", delete=False) as tmp:
+        with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", suffix=".txt", delete=False) as tmp:
             tmp.write(content)
             tmp_path = tmp.name
 
@@ -134,7 +146,7 @@ class DriveClient:
     def get_file_info(self, file_id: str) -> Dict:
         return self.service.files().get(
             fileId=file_id,
-            fields="id, name, mimeType, size, createdTime, webViewLink, parents",
+            fields="id, name, mimeType, size, md5Checksum, appProperties, createdTime, webViewLink, parents",
             supportsAllDrives=True,
         ).execute()
 
