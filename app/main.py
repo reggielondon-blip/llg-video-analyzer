@@ -15,8 +15,8 @@ from fastapi.responses import JSONResponse
 
 from app.drive_client import DriveClient
 from app.video_processor import VideoProcessor
-from app.transcriber import Transcriber
-from app.analyzer import VideoAnalyzer
+from app.transcriber import Transcriber, SPEECH_MODELS
+from app.analyzer import VideoAnalyzer, CLAUDE_MODEL, CLAUDE_EFFORT, MAX_TOKENS
 from app.email_notifier import EmailNotifier
 from app.google_ads_client import GoogleAdsClient
 from app.ringcentral_client import RingCentralClient
@@ -83,6 +83,12 @@ async def health():
     return {
         "status": "ok",
         "service": "case-video-analyzer",
+        "models": {
+            "analysis": CLAUDE_MODEL,
+            "analysis_effort": CLAUDE_EFFORT,
+            "analysis_max_output_tokens": MAX_TOKENS,
+            "transcription": SPEECH_MODELS,
+        },
         "integrations": {
             "google_ads": bool(google_ads and google_ads.enabled),
             "ringcentral": bool(ringcentral and ringcentral.enabled),

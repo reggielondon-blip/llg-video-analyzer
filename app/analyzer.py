@@ -15,8 +15,10 @@ import aiohttp
 log = logging.getLogger("analyzer")
 
 ANTHROPIC_API_URL = "https://api.anthropic.com/v1/messages"
-CLAUDE_MODEL = "claude-opus-4-5"   # Best reasoning for legal analysis
-MAX_TOKENS = 4000
+CLAUDE_MODEL = "claude-opus-5-5"
+CLAUDE_EFFORT = "medium"
+# Opus 5.5 counts both thinking and report text against this ceiling.
+MAX_TOKENS = 8192
 MAX_FRAMES_TO_CLAUDE = 12          # Keep within context + cost limits
 
 # ── Legal Analysis System Prompt ──────────────────────────────────────────────
@@ -202,6 +204,7 @@ class VideoAnalyzer:
         payload = {
             "model": CLAUDE_MODEL,
             "max_tokens": MAX_TOKENS,
+            "output_config": {"effort": CLAUDE_EFFORT},
             "system": SYSTEM_PROMPT,
             "messages": [{"role": "user", "content": content}]
         }
@@ -231,6 +234,12 @@ class VideoAnalyzer:
                         raise RuntimeError(f"Claude API returned {resp.status}")
 
                     data = await resp.json()
+                    log.info(
+                        "Claude response: model=%s stop_reason=%s input_tokens=%s output_tokens=%s",
+                        data.get("model"), data.get("stop_reason"),
+                        data.get("usage", {}).get("input_tokens"),
+                        data.get("usage", {}).get("output_tokens"),
+                    )
                     text_blocks = [
                         b["text"] for b in data.get("content", [])
                         if b.get("type") == "text"

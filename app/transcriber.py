@@ -16,6 +16,7 @@ log = logging.getLogger("transcriber")
 ASSEMBLYAI_API_KEY = os.getenv("ASSEMBLYAI_API_KEY", "")
 UPLOAD_URL = "https://api.assemblyai.com/v2/upload"
 TRANSCRIPT_URL = "https://api.assemblyai.com/v2/transcript"
+SPEECH_MODELS = ["assemblyai-stt-3-7", "universal-2"]
 POLL_INTERVAL = 5   # seconds between status checks
 TIMEOUT = 1800      # 30 min max wait for long videos
 
@@ -87,6 +88,7 @@ class Transcriber:
         """Submit transcription job with speaker diarization enabled."""
         payload = {
             "audio_url": audio_url,
+            "speech_models": SPEECH_MODELS,
             "speaker_labels": True,          # distinguish officer vs. suspect
             "speakers_expected": 3,           # officer, subject, bystanders
             "punctuate": True,
@@ -95,12 +97,11 @@ class Transcriber:
             "disfluencies": False,            # remove ums/uhs for cleaner output
             "filter_profanity": False,        # preserve exact speech for evidence
             # Boost recognition of legal/law enforcement terms
-            "word_boost": [
+            "keyterms_prompt": [
                 "Miranda", "arrest", "warrant", "officer", "license",
                 "registration", "weapon", "firearm", "hands", "vehicle",
                 "defendant", "suspect", "detain", "search", "probable cause"
-            ],
-            "boost_param": "high"
+            ]
         }
         try:
             async with session.post(
@@ -134,6 +135,11 @@ class Transcriber:
                     log.debug(f"Transcript status: {status} ({elapsed}s elapsed)")
 
                     if status == "completed":
+                        log.info(
+                            "AssemblyAI response: id=%s model=%s audio_duration=%s language=%s",
+                            transcript_id, data.get("speech_model_used"),
+                            data.get("audio_duration"), data.get("language_code"),
+                        )
                         log.info(f"Transcription complete ({elapsed}s)")
                         return data
                     elif status == "error":
