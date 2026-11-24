@@ -2,7 +2,7 @@
 import os
 import unittest
 from unittest.mock import AsyncMock, MagicMock, patch
-from app.analyzer import VideoAnalyzer
+from app.analyzer import VideoAnalyzer, build_analysis_prompt
 from app.transcriber import Transcriber
 from app import main
 
@@ -66,3 +66,11 @@ class ModelUpgradeTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(h['models']['analysis'],'claude-opus-5-5')
         self.assertEqual(h['models']['transcription'],['assemblyai-stt-3-7','universal-2'])
         self.assertNotIn('key',str(h).lower())
+
+    def test_empty_transcript_does_not_imply_absent_audio(self):
+        prompt = build_analysis_prompt('fixture.mp4', '', 35, 4)
+        self.assertIn('No speech was transcribed; review the original audio', prompt)
+        self.assertIn('It does NOT establish', prompt)
+        self.assertIn('Events and motion between frames have not been evaluated.', prompt)
+        with_speech = build_analysis_prompt('fixture.mp4', 'Recognized speech.', 35, 4)
+        self.assertIn('Recognized speech.', with_speech)

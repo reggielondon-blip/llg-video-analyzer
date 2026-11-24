@@ -66,6 +66,15 @@ AUDIO TRANSCRIPT:
 
 {num_frames} key frames from the video are attached as images (chronological order, evenly spaced throughout the video).
 
+AUDIO EVIDENCE LIMIT: You receive text transcription, not the audio waveform.
+An empty transcript means no recognized speech was supplied. It does NOT establish
+that the recording has no audio, is silent, or is a video-only pre-event buffer.
+Say "No speech was transcribed; review the original audio" when the transcript is empty.
+Do not assert absence of sirens, radio traffic, narration, or other sounds.
+FRAME EVIDENCE LIMIT: Confine factual visual findings to the sampled still frames.
+Events and motion between frames have not been evaluated.
+
+
 Please produce a complete legal analysis in the following format:
 
 ═══════════════════════════════════════════════════
